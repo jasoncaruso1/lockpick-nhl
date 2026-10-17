@@ -335,6 +335,25 @@
   #peartable th.rr-sorth{cursor:pointer}
   #peartable th.rr-sorth:hover,#peartable th.rr-sorton{color:var(--fg)}
   #peartable tfoot td{font-weight:800;border-top:2px solid var(--line)}
+  #pearfighttable{width:100%;border-collapse:collapse;font-size:11px}
+  #pearfighttable th{font-size:9px;text-transform:uppercase;letter-spacing:.5px;color:#6a7180;
+    text-align:left;padding:4px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
+  #pearfighttable td{padding:4px 8px;border-bottom:1px solid var(--line);white-space:nowrap;
+    font-variant-numeric:tabular-nums}
+  #pearfighttable td.num{text-align:right}
+  #pearfighttable .promo{color:#6a7180;font-size:9px;text-transform:uppercase}
+  #pearfighttable .ftcell{color:#6a7180;font-size:10px}
+  #pearfighttable th.rr-sorth{cursor:pointer}
+  #pearfighttable th.rr-sorth:hover,#pearfighttable th.rr-sorton{color:var(--fg)}
+  #pearfighttable tfoot td{font-weight:800;border-top:2px solid var(--line)}
+  #pearfighttable thead th{position:sticky;top:0;z-index:3;
+    background:var(--bg);box-shadow:0 1px 0 var(--line)}
+  /* PEAR VIEW TOGGLE (user 2026-10-17): the two views are named in WORDS. */
+  .pearvw{display:inline-flex;border:1px solid var(--line);border-radius:4px;overflow:hidden}
+  .pearvw button{font:inherit;font-size:9px;text-transform:uppercase;letter-spacing:.5px;
+    padding:3px 9px;border:0;background:transparent;color:#6a7180;cursor:pointer}
+  .pearvw button.on{background:#b9d66b;color:#2b350a;font-weight:800}
+  .pearvw button:not(.on):hover{color:var(--fg)}
   #peartable thead th{position:sticky;top:0;z-index:3;
     background:var(--bg);box-shadow:0 1px 0 var(--line)}
   /* DK prop menu row (expanded) */
@@ -3903,6 +3922,10 @@ function renderRR(){
 // box -- risk = BANKROLL*risk_frac, win = risk*(dec-1), E[X] = risk*(pj*dec-1). With no
 // bankroll the screen shows percentages, exactly as the Pairs screen does.
 let _pearSort={key:"risk",dir:-1};     // default = Risk descending
+// PEAR VIEW (user 2026-10-17): "Pairs" = the 28 pair rows; "Fights" = the SAME money
+// summarised per fight, the All tab's shape scoped to the pear card.
+let _pearView="pairs";
+let _pearFSort={key:"risk",dir:-1};
 // PURE: one record per pair in DISPLAY UNITS ($ when bankroll>0, else slate %).
 // Sort keys mirror RR_COLS so the header click behaviour is the Pairs screen's.
 function pearRecs(blk, bankroll){
@@ -3930,8 +3953,87 @@ function pearCells(rc, usd){
 }
 const PEAR_CSV_COLS=["Time 1","Fighter 1","Odds 1","Promotion 1","Time 2","Fighter 2","Odds 2",
                      "Promotion 2","Prob","Odds","E[X]","Risk","Win"];
+// PURE: the pear card's money summarised BY FIGHT. Every pair is counted toward BOTH of
+// its fights -- that is the point of the view (it is the exposure each fight carries, and
+// the same quantity step [2] measures and step [6] fits), and it means the Risk column
+// sums to 2x the card total. The footer says so rather than leaving it looking like a bug.
+function pearFightRecs(blk, bankroll){
+  const usd=bankroll>0;
+  const pairs=(blk&&blk.pairs)||[];
+  const byName=new Map();
+  ((blk&&blk.fights)||[]).forEach(f=>byName.set(String(f.fight),{
+    fight:String(f.fight||""), opp:String(f.opponent||""), oddsAm:f.odds,
+    odds:(amToDec(f.odds)||9e9), promo:String(f.promo||""), time1:String(f.fight_time||""),
+    prob:(f.prob==null?-1:+f.prob), target:(f.proportion==null?null:+f.proportion),
+    npairs:0, risk:0, win:0, ev:0, hasEv:false}));
+  pairs.forEach(p=>{
+    const rf=+p.risk_frac||0, dec=+p.dec, pj=(p.pj==null?null:+p.pj);
+    const risk=usd?bankroll*rf:rf*100;
+    const evu=(pj!=null)?(pj*dec-1):null;
+    [p.f1,p.f2].forEach(nm=>{
+      const r=byName.get(String(nm)); if(!r) return;
+      r.npairs++; r.risk+=risk; r.win+=risk*(dec-1);
+      if(evu!=null){ r.ev+=risk*evu; r.hasEv=true; }
+    });
+  });
+  return [...byName.values()];
+}
+const PEAR_FIGHT_COLS=[{key:"time1",lbl:"Time",dir:1},{key:"fight",lbl:"Fight",dir:1},
+  {key:"promo",lbl:"Promotion",dir:1},{key:"opp",lbl:"Opponent",dir:1},
+  {key:"prob",lbl:"Prob",dir:-1},{key:"npairs",lbl:"Pairs",dir:-1},
+  {key:"ev",lbl:"E[X]",dir:-1},{key:"risk",lbl:"Risk",dir:-1},
+  {key:"win",lbl:"Win",dir:-1},{key:"share",lbl:"Share",dir:-1}];
+const PEAR_FIGHT_CSV_COLS=["Time","Fight","Odds","Promotion","Opponent","Prob","Pairs",
+                           "E[X]","Risk","Win","Share"];
+// one row's 11 fields, in the Fights view's order + display units. `tot2` = the sum of the
+// Risk column (2x the card total), so Share is a fight's share of the risk -- which is
+// exactly its step [4] proportion.
+function pearFightCells(rc, usd, tot2){
+  const u=v=>usd?money(v):v.toFixed(2)+"%";
+  return [rc.time1, rc.fight, oddsStr(rc.oddsAm), rc.promo, rc.opp,
+          rc.prob>=0?(rc.prob*100).toFixed(2)+"%":"", String(rc.npairs),
+          rc.hasEv?u(rc.ev):"", u(rc.risk), u(rc.win),
+          tot2>0?(rc.risk/tot2*100).toFixed(4)+"%":""];
+}
+// ---- the shared head: title, counts, the Pairs|Fights toggle, CSV ---------------
+function _pearHead(nLbl, totR, usd, sp, extra){
+  const sw=v=>'<button class="'+(_pearView===v?"on":"")+'" data-pv="'+v+'">'
+    +(v==="pairs"?"Pairs":"Fights")+'</button>';
+  return '<span><b>'+escapeHtml(String(__PEAR__.event||""))+'</b></span>'
+    +'<span class="pearvw" title="Pairs = one row per pair; Fights = the same money '
+      +'summarised per fight">'+sw("pairs")+sw("fights")+'</span>'
+    +'<span>'+nLbl+'</span>'
+    +'<span><b>'+((__PEAR__.fights||[]).length)+'</b> fights</span>'
+    +'<span>Risk <b>'+(usd?money(totR):totR.toFixed(2)+"%")+'</b></span>'
+    +(sp.frozen?'<span title="'+escapeHtml(String(sp.frozen_note||"frozen snapshot"))
+      +'">FROZEN <b>'+escapeHtml(String(sp.frozen_at||"").slice(0,10))+'</b></span>':'')
+    +'<span title="every pair of the remaining fights, sized by its share of the card total; '
+      +'favourites at or beyond '+oddsStr(sp.strip_fav)+' are dropped before pairing">Favourites '
+      +oddsStr(sp.strip_fav)+' and beyond: <b>excluded</b></span>'
+    +(extra||"")
+    +'<span class="rrf-grp"><button class="rrf-chip" id="pearcsv"'
+      +' title="download the displayed view as CSV">CSV</button></span>';
+}
+function _pearWire(hd, cols, rowsFn, fname){
+  hd.querySelectorAll(".pearvw button").forEach(b=>b.addEventListener("click",()=>{
+    const v=b.dataset.pv;
+    if(v!==_pearView){ _pearView=v; renderPear(); }
+  }));
+  const csvBtn=hd.querySelector("#pearcsv");
+  if(csvBtn) csvBtn.addEventListener("click",()=>{
+    const cq=s=>'"'+String(s==null?"":s).replace(/"/g,'""')+'"';
+    const lines=[cols.map(cq).join(",")].concat(rowsFn().map(r=>r.map(cq).join(",")));
+    const blob=new Blob(["\uFEFF"+lines.join("\r\n")],{type:"text/csv;charset=utf-8"});
+    const a=document.createElement("a");
+    a.href=URL.createObjectURL(blob);
+    a.download=fname+"_"+new Date().toISOString().slice(0,10)+".csv";
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(a.href);
+  });
+}
 function renderPear(){
   if(!__PEAR__) return;
+  if(_pearView==="fights") return renderPearFights();
   const box=document.getElementById("pearpage"), hd=document.getElementById("pearhead");
   const sp=__PEAR__.spec||{}, usd=BANKROLL>0;
   const recs=pearRecs(__PEAR__, BANKROLL);
@@ -3959,15 +4061,7 @@ function renderPear(){
   const head=RR_COLS.map(c=>
     '<th class="rr-sorth'+(k===c.key?' rr-sorton':'')+'" data-key="'+c.key
     +'" title="click to sort by '+c.lbl+'">'+c.lbl+(k===c.key?(dir>0?' \u25B2':' \u25BC'):'')+'</th>').join("");
-  hd.innerHTML='<span><b>'+escapeHtml(String(__PEAR__.event||""))+'</b></span>'
-    +'<span><b>'+recs.length+'</b> pairs</span>'
-    +'<span><b>'+((__PEAR__.fights||[]).length)+'</b> fights</span>'
-    +'<span>Risk <b>'+u(totR)+'</b></span>'
-    +'<span title="every pair of the remaining fights, sized by its share of the card total; '
-      +'favourites at or beyond '+oddsStr(sp.strip_fav)+' are dropped before pairing">Favourites '
-      +oddsStr(sp.strip_fav)+' and beyond: <b>excluded</b></span>'
-    +'<span class="rrf-grp"><button class="rrf-chip" id="pearcsv"'
-      +' title="download the displayed view as CSV">CSV</button></span>';
+  hd.innerHTML=_pearHead('<b>'+recs.length+'</b> pairs', totR, usd, sp);
   box.innerHTML=recs.length
     ? '<div class="rrscroll"><table id="peartable">'
       +'<thead><tr>'+head+'</tr></thead><tbody>'+rows+'</tbody>'
@@ -3977,22 +4071,67 @@ function renderPear(){
       +'<td class="num">'+u(totW)+'</td></tr></tfoot>'
       +'</table></div>'
     : '<p class="subtle">No pairs on the pear card.</p>';
-  const csvBtn=hd.querySelector("#pearcsv");
-  if(csvBtn) csvBtn.addEventListener("click",()=>{
-    const cq=s=>'"'+String(s==null?"":s).replace(/"/g,'""')+'"';
-    const lines=[PEAR_CSV_COLS.map(cq).join(",")]
-      .concat(recs.map(rc=>pearCells(rc, usd).map(cq).join(",")));
-    const blob=new Blob(["\uFEFF"+lines.join("\r\n")],{type:"text/csv;charset=utf-8"});
-    const a=document.createElement("a");
-    a.href=URL.createObjectURL(blob);
-    a.download="pear_card_"+new Date().toISOString().slice(0,10)+".csv";
-    document.body.appendChild(a); a.click(); a.remove();
-    URL.revokeObjectURL(a.href);
-  });
+  _pearWire(hd, PEAR_CSV_COLS, ()=>recs.map(rc=>pearCells(rc, usd)), "pear_card");
   box.querySelectorAll("#peartable th[data-key]").forEach(th=>th.addEventListener("click",()=>{
     const key=th.dataset.key;
     if(_pearSort.key===key) _pearSort.dir*=-1;
     else { const col=RR_COLS.find(c=>c.key===key); _pearSort={key:key,dir:col?col.dir:1}; }
+    renderPear();
+  }));
+}
+// ---- FIGHTS view: the All tab's shape, scoped to the pear card -------------------
+function renderPearFights(){
+  const box=document.getElementById("pearpage"), hd=document.getElementById("pearhead");
+  const sp=__PEAR__.spec||{}, usd=BANKROLL>0;
+  const recs=pearFightRecs(__PEAR__, BANKROLL);
+  const tot2=recs.reduce((t,r)=>t+r.risk,0);          // 2x the card total, by construction
+  recs.forEach(r=>{ r.share=tot2>0?r.risk/tot2:0; });
+  const k=_pearFSort.key, dir=_pearFSort.dir;
+  recs.sort((a,b)=>{
+    const va=a[k], vb=b[k];
+    let c=(typeof va==="string")?va.localeCompare(vb):(va<vb?-1:(va>vb?1:0));
+    if(c) return c*dir;
+    return b.risk<a.risk?-1:(b.risk>a.risk?1:0);
+  });
+  let totW=0, totE=0, totP=0;
+  const rows=recs.map(rc=>{
+    totW+=rc.win; totE+=rc.hasEv?rc.ev:0; totP+=rc.npairs;
+    const c=pearFightCells(rc, usd, tot2);
+    return '<tr>'
+      +'<td class="ftcell">'+escapeHtml(c[0])+'</td>'
+      +'<td><b>'+escapeHtml(c[1])+'</b> '+c[2]+'</td>'
+      +'<td class="promo">'+escapeHtml(c[3])+'</td>'
+      +'<td>'+escapeHtml(c[4])+'</td>'
+      +'<td class="num">'+c[5]+'</td><td class="num">'+c[6]+'</td>'
+      +'<td class="num">'+c[7]+'</td><td class="num">'+c[8]+'</td>'
+      +'<td class="num">'+c[9]+'</td><td class="num">'+c[10]+'</td></tr>';
+  }).join("");
+  const u=v=>usd?money(v):v.toFixed(2)+"%";
+  const head=PEAR_FIGHT_COLS.map(c=>
+    '<th class="rr-sorth'+(k===c.key?' rr-sorton':'')+'" data-key="'+c.key
+    +'" title="click to sort by '+c.lbl+'">'+c.lbl+(k===c.key?(dir>0?' \u25B2':' \u25BC'):'')+'</th>').join("");
+  const cardTot=tot2/2;
+  hd.innerHTML=_pearHead('<b>'+recs.length+'</b> fights', cardTot, usd, sp,
+    '<span title="each pair rides on BOTH of its fights, so the Risk column counts every '
+    +'pair twice and totals exactly 2x the card risk">per-fight risk sums to '
+    +'<b>2\u00D7</b> the card</span>');
+  box.innerHTML=recs.length
+    ? '<div class="rrscroll"><table id="pearfighttable">'
+      +'<thead><tr>'+head+'</tr></thead><tbody>'+rows+'</tbody>'
+      +'<tfoot><tr><td colspan="5">'+recs.length+' fights</td>'
+      +'<td class="num">'+totP+'</td>'
+      +'<td class="num">'+u(totE)+'</td>'
+      +'<td class="num">'+u(tot2)+'</td>'
+      +'<td class="num">'+u(totW)+'</td>'
+      +'<td class="num">100.0000%</td></tr></tfoot>'
+      +'</table></div>'
+    : '<p class="subtle">No fights on the pear card.</p>';
+  _pearWire(hd, PEAR_FIGHT_CSV_COLS,
+    ()=>recs.map(rc=>pearFightCells(rc, usd, tot2)), "pear_card_fights");
+  box.querySelectorAll("#pearfighttable th[data-key]").forEach(th=>th.addEventListener("click",()=>{
+    const key=th.dataset.key;
+    if(_pearFSort.key===key) _pearFSort.dir*=-1;
+    else { const col=PEAR_FIGHT_COLS.find(c=>c.key===key); _pearFSort={key:key,dir:col?col.dir:1}; }
     renderPear();
   }));
 }
